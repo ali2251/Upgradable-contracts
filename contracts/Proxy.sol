@@ -1,5 +1,7 @@
 pragma solidity ^0.4.24;
 
+import "./AddressUtils.sol";
+
 contract Registry {
     mapping (address => address) public addresses;
     mapping (address => bool) public userPreferences;
@@ -37,6 +39,8 @@ contract Proxy {
     function initialize(address _registryImpl,address _defLogicContract) internal {
         require(_registryImpl != 0);
         require(_defLogicContract != 0);
+        require(Address.isContract(_registryImpl));
+        require(Address.isContract(_defLogicContract));
 
         bytes32 reg = REGISTRY_IMPLEMENTATION_ADDRESS_KEY;
         bytes32 impl = DEFAULT_IMPLEMENTATION_ADDRESS_KEY;
@@ -51,48 +55,50 @@ contract Proxy {
         initialize(_reg, _log);
     }
     
-    function setImpl(address _i) public {
-        bytes32 s = REGISTRY_IMPLEMENTATION_ADDRESS_KEY;
+    function upgradeDefaultImplementation(address _i) public {
+        require(_i != 0);
+        require(Address.isContract(_i));
+        bytes32 impl = DEFAULT_IMPLEMENTATION_ADDRESS_KEY;
         //solium-disable-next-line security/no-inline-assembly
         assembly {
-            sstore(s, _i)
+            sstore(impl, _i)
         }
     }
 
     function() public {
         
-        bytes32 s = REGISTRY_IMPLEMENTATION_ADDRESS_KEY;
-        bytes32 l = DEFAULT_IMPLEMENTATION_ADDRESS_KEY;
-        address impl = 0;
-        address realImpl = 0;
+        bytes32 regImplKey = REGISTRY_IMPLEMENTATION_ADDRESS_KEY;
+        bytes32 defImplKey = DEFAULT_IMPLEMENTATION_ADDRESS_KEY;
+        address regImplAddress = 0;
+        address defImplAddress = 0;
         //solium-disable-next-line security/no-inline-assembly
         assembly {
-            impl := sload(s)
-            realImpl := sload(l)
+            regImplAddress := sload(regImplKey)
+            defImplAddress := sload(defImplKey)
         }
     
-        require(impl != 0);
+        require(regImplAddress != 0 && defImplAddress != 0);
 
-        Registry r = Registry(impl);
+        Registry r = Registry(regImplAddress);
     
         if(r.userPreferences(msg.sender) == true) {
             // means that user may have a different address for implementation
             
             if ( r.addresses(msg.sender) != 0) {
                 // they dont have it set, lets use default one
-                realImpl =  r.addresses(msg.sender);
+                defImplAddress = r.addresses(msg.sender);
             }
         }
     
     // at this point realImpl should not be 0
     
-        assert(realImpl != 0);
+        assert(defImplAddress != 0);
     
         //solium-disable-next-line security/no-inline-assembly
         assembly {
             let ptr := mload(0x40)
             calldatacopy(ptr, 0, calldatasize)
-            let result := delegatecall(gas, realImpl, ptr, calldatasize, 0, 0)
+            let result := delegatecall(gas, defImplAddress, ptr, calldatasize, 0, 0)
             let size := returndatasize
             returndatacopy(ptr, 0, size)
 
