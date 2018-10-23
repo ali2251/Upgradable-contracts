@@ -1,15 +1,37 @@
 pragma solidity ^0.4.24;
 
 import "./AddressUtils.sol";
+import "./Ownable.sol";
 
-contract Registry {
+contract Registry is Ownable {
+
+    event RegistryCreated(address addressOfRegistryContract,address from );
+
     mapping (address => address) public addresses;
     mapping (address => bool) public userPreferences;
+    address[] public validImplementations;
     
-    function setAddress(address newAddress) public {
-        require(newAddress != 0);
+  
+    constructor() public {
+        emit RegistryCreated(address(this),msg.sender);
+    }
+    function setImplementationAddress(address newAddress) public {
+        require(newAddress != 0, "cant set value to 0");
+        require(checkValidImplementationAddress(newAddress), "not a valid implementation address");
         addresses[msg.sender] = newAddress;
     }
+
+    function checkValidImplementationAddress(address addr) internal view returns (bool) {
+        for(uint i = 0; i < validImplementations.length; ++i) {
+            if (addr == validImplementations[i]) return true;
+        }
+        return false;
+    }
+
+    function addImplementation(address toAdd) external onlyOwner {
+        require(toAdd != 0);
+        validImplementations.push(toAdd);
+    } 
     
     function updatePreference(bool newPref) public {
         userPreferences[msg.sender] = newPref;
@@ -36,33 +58,44 @@ contract Proxy {
     bytes32 private constant REGISTRY_IMPLEMENTATION_ADDRESS_KEY = keccak256("Registry address key");
     bytes32 private constant DEFAULT_IMPLEMENTATION_ADDRESS_KEY = keccak256("default implementation address key");
     
-    function initialize(address _registryImpl,address _defLogicContract) internal {
-        require(_registryImpl != 0);
+    function initialize(address _defLogicContract) internal {
         require(_defLogicContract != 0);
-        require(Address.isContract(_registryImpl));
         require(Address.isContract(_defLogicContract));
 
+        Registry registry = new Registry();
+        address regAddress = address(registry);
+       
         bytes32 reg = REGISTRY_IMPLEMENTATION_ADDRESS_KEY;
         bytes32 impl = DEFAULT_IMPLEMENTATION_ADDRESS_KEY;
         //solium-disable-next-line security/no-inline-assembly
         assembly {
-            sstore(reg, _registryImpl)
+            sstore(reg, regAddress)
             sstore(impl, _defLogicContract)
         }
+
+        registry.addImplementation(_defLogicContract);
+
     }
     
-    constructor(address _reg, address _log) public {
-        initialize(_reg, _log);
+    constructor(address _log) public {
+        initialize( _log);
     }
     
     function upgradeDefaultImplementation(address _i) public {
         require(_i != 0);
         require(Address.isContract(_i));
         bytes32 impl = DEFAULT_IMPLEMENTATION_ADDRESS_KEY;
+        bytes32 regKey = REGISTRY_IMPLEMENTATION_ADDRESS_KEY;
+        address registryImpl = 0;
+      
         //solium-disable-next-line security/no-inline-assembly
         assembly {
             sstore(impl, _i)
+            registryImpl := sload(regKey)
         }
+        assert(registryImpl != 0);
+        Registry reg = Registry(registryImpl);
+        reg.addImplementation(_i);
     }
 
     function() public {
@@ -90,7 +123,7 @@ contract Proxy {
             }
         }
     
-    // at this point realImpl should not be 0
+    // at this point defImplAddress should not be 0
     
         assert(defImplAddress != 0);
     
