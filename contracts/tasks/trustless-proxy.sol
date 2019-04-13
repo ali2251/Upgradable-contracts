@@ -1,12 +1,11 @@
 pragma solidity >=0.5.2;
 
-
+// import Ownable library straight from github
 import "github.com/OpenZeppelin/zeppelin-solidity/contracts/ownership/Ownable.sol";
 
 contract ProxyStorage {
     address public implementation;
 }
-
 
 contract Proxy is ProxyStorage, Ownable {
 
@@ -37,21 +36,17 @@ contract Proxy is ProxyStorage, Ownable {
 
 
 contract ScoreStorage {
-
-    uint256 public score;
-
+    uint public score;
 }
 
 contract Score is ProxyStorage, ScoreStorage {
-
-    function setScore(uint256 _score) public {
+    function setScore(uint _score) public {
         score = _score;
     }
 }
 
 contract ScoreV2 is ProxyStorage, ScoreStorage {
-
-    function setScore(uint256 _score) public {
+    function setScore(uint _score) public {
         score = _score + 1;
     }
 }
