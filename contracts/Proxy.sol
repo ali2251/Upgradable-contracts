@@ -1,137 +1,82 @@
-pragma solidity ^0.4.24;
+pragma solidity 0.5.1;
 
-import "./AddressUtils.sol";
-import "./Ownable.sol";
+import "./Registry.sol";
 
-contract Registry is Ownable {
+/**
+ * @title Proxy
+ * @author Rob Hitchens
+ * @notice Trustless upgradable contract proxy.
+ */
+ 
+interface ProxyInterface {
+    function registryAddress() external view returns(address);
+    function componentUid() external view returns(bytes32);
+    function userImplementation(address user) external view returns(address);
+    function () external payable;
+}
 
-    event RegistryCreated(address addressOfRegistryContract,address from );
-
-    mapping (address => address) public addresses;
-    mapping (address => bool) public userPreferences;
-    address[] public validImplementations;
+contract Proxy is ProxyInterface {
     
-  
+    bytes32 private constant REGISTRY_ADDRESS_KEY = keccak256("Registry address key");
+    address private constant UNDEFINED = address(0);
+    
+    /**
+     * @notice Deploys a new registry for this component. Each proxy controls one upgradable component. 
+     * @notice Stores the release manager contract address in the proxy contract. 
+     * @notice Uses a collision-resistant storage slot.
+     */
     constructor() public {
-        emit RegistryCreated(address(this),msg.sender);
-    }
-    function setImplementationAddress(address newAddress) public {
-        require(newAddress != 0, "cant set value to 0");
-        require(checkValidImplementationAddress(newAddress), "not a valid implementation address");
-        addresses[msg.sender] = newAddress;
-    }
-
-    function checkValidImplementationAddress(address addr) internal view returns (bool) {
-        for(uint i = 0; i < validImplementations.length; ++i) {
-            if (addr == validImplementations[i]) return true;
+        Registry registry = new Registry();
+        registry.transferOwnership(msg.sender);
+        address registryAddress = address(registry);
+        bytes32 registryAddressStorageKey = REGISTRY_ADDRESS_KEY;
+        //solium-disable-next-line security/no-inline-assembly
+        assembly {
+            sstore(registryAddressStorageKey, registryAddress)
         }
-        return false;
     }
-
-    function addImplementation(address toAdd) external onlyOwner {
-        require(toAdd != 0);
-        validImplementations.push(toAdd);
+    
+    /**
+     * @return The address of authoratative implementation registry for this proxy. 
+     */
+    function registryAddress() public view returns(address) {
+        address r;
+        bytes32 registryAddressKey = REGISTRY_ADDRESS_KEY;
+        //solium-disable-next-line security/no-inline-assembly
+        assembly {
+            r := sload(registryAddressKey)
+        }
+        require(r != UNDEFINED, "Internal error. The registry is undefined.");
+        return r;
+    }
+    
+    /**
+     * @return The componentUid for this proxy.
+     */
+    function componentUid() public view returns(bytes32) {
+        RegistryInterface registry = RegistryInterface(registryAddress());
+        return registry.componentUid();
+    }
+    
+    /** 
+     * @return The user implementation preference. 
+     * @dev If the user has no preference or the preference was recalled, returns the default implementation. 
+     */
+    function userImplementation(address user) public view returns(address) {
+        RegistryInterface registry = RegistryInterface(registryAddress());
+        return registry.userImplementation(user);
     } 
     
-    function updatePreference(bool newPref) public {
-        userPreferences[msg.sender] = newPref;
-    }
-}
-
-contract Hello {
-    address public me = 0;
-    function sayHello() public pure returns(string) {
-        return "Hello";
-    }
-}
-
-
-contract HelloV2 is Hello {
-    uint public abc = 1234;
-    function sayHello() public pure returns (string) {
-        return "hello v2";
-    }
-}
-
-contract Proxy {
-  
-    bytes32 private constant REGISTRY_IMPLEMENTATION_ADDRESS_KEY = keccak256("Registry address key");
-    bytes32 private constant DEFAULT_IMPLEMENTATION_ADDRESS_KEY = keccak256("default implementation address key");
-    
-    function initialize(address _defLogicContract) internal {
-        require(_defLogicContract != 0);
-        require(Address.isContract(_defLogicContract));
-
-        Registry registry = new Registry();
-        address regAddress = address(registry);
-       
-        bytes32 reg = REGISTRY_IMPLEMENTATION_ADDRESS_KEY;
-        bytes32 impl = DEFAULT_IMPLEMENTATION_ADDRESS_KEY;
-        //solium-disable-next-line security/no-inline-assembly
-        assembly {
-            sstore(reg, regAddress)
-            sstore(impl, _defLogicContract)
-        }
-
-        registry.addImplementation(_defLogicContract);
-
-    }
-    
-    constructor(address _log) public {
-        initialize( _log);
-    }
-    
-    function upgradeDefaultImplementation(address _i) public {
-        require(_i != 0);
-        require(Address.isContract(_i));
-        bytes32 impl = DEFAULT_IMPLEMENTATION_ADDRESS_KEY;
-        bytes32 regKey = REGISTRY_IMPLEMENTATION_ADDRESS_KEY;
-        address registryImpl = 0;
-      
-        //solium-disable-next-line security/no-inline-assembly
-        assembly {
-            sstore(impl, _i)
-            registryImpl := sload(regKey)
-        }
-        assert(registryImpl != 0);
-        Registry reg = Registry(registryImpl);
-        reg.addImplementation(_i);
-    }
-
-    function() public {
-        
-        bytes32 regImplKey = REGISTRY_IMPLEMENTATION_ADDRESS_KEY;
-        bytes32 defImplKey = DEFAULT_IMPLEMENTATION_ADDRESS_KEY;
-        address regImplAddress = 0;
-        address defImplAddress = 0;
-        //solium-disable-next-line security/no-inline-assembly
-        assembly {
-            regImplAddress := sload(regImplKey)
-            defImplAddress := sload(defImplKey)
-        }
-    
-        require(regImplAddress != 0 && defImplAddress != 0);
-
-        Registry r = Registry(regImplAddress);
-    
-        if(r.userPreferences(msg.sender) == true) {
-            // means that user may have a different address for implementation
-            
-            if ( r.addresses(msg.sender) != 0) {
-                // they dont have it set, lets use default one
-                defImplAddress = r.addresses(msg.sender);
-            }
-        }
-    
-    // at this point defImplAddress should not be 0
-    
-        assert(defImplAddress != 0);
-    
+    /**
+     * @notice Delegates invokations to the user's preferred implementation. 
+     */
+    function () external payable {
+        address implementationAddress = userImplementation(msg.sender);
         //solium-disable-next-line security/no-inline-assembly
         assembly {
             let ptr := mload(0x40)
             calldatacopy(ptr, 0, calldatasize)
-            let result := delegatecall(gas, defImplAddress, ptr, calldatasize, 0, 0)
+            let result := delegatecall(gas, implementationAddress, ptr, calldatasize, 0, 0)
             let size := returndatasize
             returndatacopy(ptr, 0, size)
 
@@ -140,7 +85,4 @@ contract Proxy {
             default { return(ptr, size) }
         }
     }
-    
 }
-
-
